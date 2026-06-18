@@ -9,7 +9,7 @@ st.set_page_config(layout="wide", page_title="Survey Word Cloud Studio")
 
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
         .step-header { color: #1e88e5; font-weight: 600; margin-top: 20px; border-bottom: 2px solid #f0f2f6; padding-bottom: 10px;}
     </style>
@@ -153,6 +153,14 @@ if 'df' in st.session_state:
         st.markdown("**1. Select the Open-Ended Question (Verbatims)**")
         text_col = st.selectbox("Which column contains the open-ended responses?", df.columns)
         
+        # SMART HEURISTIC: Check if selected column is just checkbox data
+        series_clean = df[text_col].dropna().astype(str).str.strip().str.lower()
+        unique_check = series_clean.unique()
+        is_checkbox_col = False
+        if len(unique_check) <= 3 and any(x in ['checked', 'unchecked', 'selected', 'not selected', 'yes', 'no'] for x in unique_check):
+            is_checkbox_col = True
+            st.warning("⚠️ **Warning:** It looks like you selected a multiple-choice checkbox grid instead of a comment box! Try choosing an open-ended question (like questions starting with **Q7a**) for a better word cloud.")
+        
         st.markdown("**2. Filter by Demographic / Segment (Optional)**")
         filter_col = st.selectbox("Filter data using:", ["No Filter"] + list(df.columns))
         
@@ -179,6 +187,14 @@ if 'df' in st.session_state:
             else:
                 # Add default and custom ignore-words
                 stopwords = set(STOPWORDS)
+                
+                # Automatically add survey checkbox artifacts to stopwords
+                survey_noise = {
+                    "checked", "unchecked", "selected", "not", "yes", "no", "nan", 
+                    "prefer", "english", "french", "canadian", "prefer english", "prefer french"
+                }
+                stopwords.update(survey_noise)
+                
                 if custom_stopwords_input:
                     custom_words = [w.strip().lower() for w in custom_stopwords_input.split(",")]
                     stopwords.update(custom_words)
