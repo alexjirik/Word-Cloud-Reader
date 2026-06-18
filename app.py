@@ -9,7 +9,7 @@ st.set_page_config(layout="wide", page_title="Survey Word Cloud Studio")
 
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
         .step-header { color: #1e88e5; font-weight: 600; margin-top: 20px; border-bottom: 2px solid #f0f2f6; padding-bottom: 10px;}
     </style>
@@ -33,6 +33,87 @@ def rename_columns_uniquely(df, col_mapping):
     df.columns = new_cols
     return df
 
+# --- OPTIMIZED SURVEY DATA DECODING & LOADING ---
+@st.cache_data(show_spinner="Processing and decoding survey data...")
+def load_and_decode_survey(raw_bytes, raw_name, info_bytes=None, info_name=None, values_bytes=None, values_name=None):
+    """
+    Blazing fast, cached function that processes and decodes all raw datasets, 
+    variable information dictionaries, and numeric mappings in one vectorized pass.
+    """
+    # 1. Load Main Raw Dataset
+    if raw_name.endswith('.csv'):
+        df = pd.read_csv(io.BytesIO(raw_bytes), low_memory=False)
+    else:
+        df = pd.read_excel(io.BytesIO(raw_bytes))
+        
+    # 2. Decode Categorical Numbers (Variable Values) using fast vectorized lookups
+    if values_bytes:
+        if values_name.endswith('.csv'):
+            df_values = pd.read_csv(io.BytesIO(values_bytes), header=None)
+        else:
+            df_values = pd.read_excel(io.BytesIO(values_bytes), header=None)
+            
+        # Find where header starts
+        val_header_idx = 0
+        for idx, row in df_values.iterrows():
+            row_strs = [str(x).lower().strip() for x in row.dropna()]
+            if 'value' in row_strs and 'label' in row_strs:
+                val_header_idx = idx
+                break
+        
+        df_values_clean = df_values.iloc[val_header_idx + 1:].copy()
+        df_values_clean = df_values_clean.iloc[:, :3]
+        df_values_clean.columns = ['Variable', 'Value', 'Label']
+        df_values_clean['Variable'] = df_values_clean['Variable'].ffill()
+        
+        # Populate float, int, and string lookup keys to prevent mapping misses
+        mapping_dict = {}
+        for var, group in df_values_clean.groupby('Variable'):
+            sub_map = {}
+            for _, row in group.iterrows():
+                v = row['Value']
+                l = row['Label']
+                if pd.isna(v) or pd.isna(l): continue
+                
+                label_str = str(l).strip()
+                sub_map[str(v).strip()] = label_str
+                try:
+                    vf = float(v)
+                    sub_map[vf] = label_str
+                    if vf.is_integer():
+                        sub_map[int(vf)] = label_str
+                except ValueError:
+                    pass
+            mapping_dict[str(var).strip()] = sub_map
+            
+        # Fast Vectorized Mapping
+        for col in df.columns:
+            if col in mapping_dict:
+                df[col] = df[col].map(mapping_dict[col]).fillna(df[col])
+
+    # 3. Decode Column Headers (Variable Info)
+    if info_bytes:
+        if info_name.endswith('.csv'):
+            df_info = pd.read_csv(io.BytesIO(info_bytes), header=None)
+        else:
+            df_info = pd.read_excel(io.BytesIO(info_bytes), header=None)
+            
+        info_header_idx = 0
+        for idx, row in df_info.iterrows():
+            row_strs = [str(x).lower().strip() for x in row.dropna()]
+            if 'variable' in row_strs and 'label' in row_strs:
+                info_header_idx = idx
+                break
+                
+        df_info_clean = df_info.iloc[info_header_idx + 1:].copy()
+        df_info_clean.columns = df_info.iloc[info_header_idx].astype(str).str.strip()
+        
+        if 'Variable' in df_info_clean.columns and 'Label' in df_info_clean.columns:
+            col_mapping = dict(zip(df_info_clean['Variable'], df_info_clean['Label']))
+            df = rename_columns_uniquely(df, col_mapping)
+            
+    return df
+
 # --- APP UI ---
 st.title("☁️ Survey Word Cloud Studio")
 st.markdown("Upload your survey files together. The app will automatically decode all response numbers into readable text, replace confusing column headers with your actual questions, and generate custom word clouds.")
@@ -50,88 +131,30 @@ with col3:
 
 if raw_file:
     try:
-        # 1. Load Main Raw Dataset
-        if raw_file.name.endswith('.csv'):
-            df = pd.read_csv(raw_file, low_memory=False)
-        else:
-            df = pd.read_excel(raw_file)
-            
-        # 2. Decode Categorical Numbers (Variable Values)
-        if values_file:
-            if values_file.name.endswith('.csv'):
-                df_values = pd.read_csv(values_file, header=None)
-            else:
-                df_values = pd.read_excel(values_file, header=None)
-                
-            # Dynamically scan to find where the header actually starts
-            val_header_idx = 0
-            for idx, row in df_values.iterrows():
-                row_strs = [str(x).lower().strip() for x in row.dropna()]
-                if 'value' in row_strs and 'label' in row_strs:
-                    val_header_idx = idx
-                    break
-            
-            df_values_clean = df_values.iloc[val_header_idx + 1:].copy()
-            df_values_clean = df_values_clean.iloc[:, :3] # Keep first three columns
-            df_values_clean.columns = ['Variable', 'Value', 'Label']
-            df_values_clean['Variable'] = df_values_clean['Variable'].ffill() # Fill down empty variables
-            
-            # Construct nested dictionary mapping: { Variable: { Value_String: Label } }
-            mapping_dict = {}
-            for var, group in df_values_clean.groupby('Variable'):
-                sub_map = {}
-                for _, row in group.iterrows():
-                    v = row['Value']
-                    l = row['Label']
-                    if pd.isna(v) or pd.isna(l): continue
-                    try:
-                        vf = float(v)
-                        v_str = str(int(vf)) if vf.is_integer() else str(vf)
-                    except ValueError:
-                        v_str = str(v).strip()
-                    sub_map[v_str] = str(l).strip()
-                mapping_dict[str(var).strip()] = sub_map
-                
-            # Safely decode cells
-            def decode_val(val, d):
-                if pd.isna(val): return val
-                try:
-                    vf = float(val)
-                    v_str = str(int(vf)) if vf.is_integer() else str(vf)
-                except ValueError:
-                    v_str = str(val).strip()
-                return d.get(v_str, val)
-                
-            for col in df.columns:
-                if col in mapping_dict:
-                    df[col] = df[col].apply(lambda x: decode_val(x, mapping_dict[col]))
+        # Extract raw byte values to enable Streamlit cache hashing
+        raw_bytes = raw_file.getvalue()
+        raw_name = raw_file.name
+        
+        info_bytes = info_file.getvalue() if info_file else None
+        info_name = info_file.name if info_file else None
+        
+        values_bytes = values_file.getvalue() if values_file else None
+        values_name = values_file.name if values_file else None
+        
+        # Load processed and cached dataset
+        df = load_and_decode_survey(
+            raw_bytes, raw_name, 
+            info_bytes, info_name, 
+            values_bytes, values_name
+        )
+        
+        # Alert successes based on uploaded files
+        if info_file and values_file:
+            st.success("🎉 Columns renamed and response numbers decoded into text labels instantly!")
+        elif info_file:
+            st.success("🏷️ Column headers successfully translated to real questions!")
+        elif values_file:
             st.success("🔢 Response numbers successfully decoded into text labels!")
-
-        # 3. Decode Column Headers (Variable Info)
-        if info_file:
-            if info_file.name.endswith('.csv'):
-                df_info = pd.read_csv(info_file, header=None)
-            else:
-                df_info = pd.read_excel(info_file, header=None)
-                
-            # Dynamically scan to find header row
-            info_header_idx = 0
-            for idx, row in df_info.iterrows():
-                row_strs = [str(x).lower().strip() for x in row.dropna()]
-                if 'variable' in row_strs and 'label' in row_strs:
-                    info_header_idx = idx
-                    break
-                    
-            df_info_clean = df_info.iloc[info_header_idx + 1:].copy()
-            df_info_clean.columns = df_info.iloc[info_header_idx].astype(str).str.strip()
-            
-            if 'Variable' in df_info_clean.columns and 'Label' in df_info_clean.columns:
-                col_mapping = dict(zip(df_info_clean['Variable'], df_info_clean['Label']))
-                # Translate uniquely to avoid duplicates crash
-                df = rename_columns_uniquely(df, col_mapping)
-                st.success("🏷️ Column headers successfully translated to real questions!")
-            else:
-                st.warning("Could not find required 'Variable' and 'Label' columns in the Info file.")
         
         st.session_state.df = df
         
