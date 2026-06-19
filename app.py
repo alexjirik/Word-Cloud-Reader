@@ -9,13 +9,13 @@ st.set_page_config(layout="wide", page_title="Survey Word Cloud Studio")
 
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
+        @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
         .step-header { color: #1e88e5; font-weight: 600; margin-top: 20px; border-bottom: 2px solid #f0f2f6; padding-bottom: 10px;}
     </style>
 """, unsafe_allow_html=True)
 
-# Helper function to prevent duplicate headers after translation
+# Helper function to prevent duplicate headers
 def rename_columns_uniquely(df, col_mapping):
     new_cols = []
     seen = {}
@@ -33,87 +33,6 @@ def rename_columns_uniquely(df, col_mapping):
     df.columns = new_cols
     return df
 
-# --- OPTIMIZED SURVEY DATA DECODING & LOADING ---
-@st.cache_data(show_spinner="Processing and decoding survey data...")
-def load_and_decode_survey(raw_bytes, raw_name, info_bytes=None, info_name=None, values_bytes=None, values_name=None):
-    """
-    Blazing fast, cached function that processes and decodes all raw datasets, 
-    variable information dictionaries, and numeric mappings in one vectorized pass.
-    """
-    # 1. Load Main Raw Dataset
-    if raw_name.endswith('.csv'):
-        df = pd.read_csv(io.BytesIO(raw_bytes), low_memory=False)
-    else:
-        df = pd.read_excel(io.BytesIO(raw_bytes))
-        
-    # 2. Decode Categorical Numbers (Variable Values) using fast vectorized lookups
-    if values_bytes:
-        if values_name.endswith('.csv'):
-            df_values = pd.read_csv(io.BytesIO(values_bytes), header=None)
-        else:
-            df_values = pd.read_excel(io.BytesIO(values_bytes), header=None)
-            
-        # Find where header starts
-        val_header_idx = 0
-        for idx, row in df_values.iterrows():
-            row_strs = [str(x).lower().strip() for x in row.dropna()]
-            if 'value' in row_strs and 'label' in row_strs:
-                val_header_idx = idx
-                break
-        
-        df_values_clean = df_values.iloc[val_header_idx + 1:].copy()
-        df_values_clean = df_values_clean.iloc[:, :3]
-        df_values_clean.columns = ['Variable', 'Value', 'Label']
-        df_values_clean['Variable'] = df_values_clean['Variable'].ffill()
-        
-        # Populate float, int, and string lookup keys to prevent mapping misses
-        mapping_dict = {}
-        for var, group in df_values_clean.groupby('Variable'):
-            sub_map = {}
-            for _, row in group.iterrows():
-                v = row['Value']
-                l = row['Label']
-                if pd.isna(v) or pd.isna(l): continue
-                
-                label_str = str(l).strip()
-                sub_map[str(v).strip()] = label_str
-                try:
-                    vf = float(v)
-                    sub_map[vf] = label_str
-                    if vf.is_integer():
-                        sub_map[int(vf)] = label_str
-                except ValueError:
-                    pass
-            mapping_dict[str(var).strip()] = sub_map
-            
-        # Fast Vectorized Mapping
-        for col in df.columns:
-            if col in mapping_dict:
-                df[col] = df[col].map(mapping_dict[col]).fillna(df[col])
-
-    # 3. Decode Column Headers (Variable Info)
-    if info_bytes:
-        if info_name.endswith('.csv'):
-            df_info = pd.read_csv(io.BytesIO(info_bytes), header=None)
-        else:
-            df_info = pd.read_excel(io.BytesIO(info_bytes), header=None)
-            
-        info_header_idx = 0
-        for idx, row in df_info.iterrows():
-            row_strs = [str(x).lower().strip() for x in row.dropna()]
-            if 'variable' in row_strs and 'label' in row_strs:
-                info_header_idx = idx
-                break
-                
-        df_info_clean = df_info.iloc[info_header_idx + 1:].copy()
-        df_info_clean.columns = df_info.iloc[info_header_idx].astype(str).str.strip()
-        
-        if 'Variable' in df_info_clean.columns and 'Label' in df_info_clean.columns:
-            col_mapping = dict(zip(df_info_clean['Variable'], df_info_clean['Label']))
-            df = rename_columns_uniquely(df, col_mapping)
-            
-    return df
-
 # --- APP UI ---
 st.title("☁️ Survey Word Cloud Studio")
 st.markdown("Upload your survey files together. The app will automatically decode all response numbers into readable text, replace confusing column headers with your actual questions, and generate custom word clouds.")
@@ -129,44 +48,96 @@ with col2:
 with col3:
     values_file = st.file_uploader("3. Upload Variable Values (.csv or .xlsx) [Optional]", type=['csv', 'xlsx'])
 
+# --- THE SPEED OPTIMIZATION: ONE-TIME PROCESS BUTTON ---
 if raw_file:
-    try:
-        # Extract raw byte values to enable Streamlit cache hashing
-        raw_bytes = raw_file.getvalue()
-        raw_name = raw_file.name
-        
-        info_bytes = info_file.getvalue() if info_file else None
-        info_name = info_file.name if info_file else None
-        
-        values_bytes = values_file.getvalue() if values_file else None
-        values_name = values_file.name if values_file else None
-        
-        # Load processed and cached dataset
-        df = load_and_decode_survey(
-            raw_bytes, raw_name, 
-            info_bytes, info_name, 
-            values_bytes, values_name
-        )
-        
-        # Alert successes based on uploaded files
-        if info_file and values_file:
-            st.success("🎉 Columns renamed and response numbers decoded into text labels instantly!")
-        elif info_file:
-            st.success("🏷️ Column headers successfully translated to real questions!")
-        elif values_file:
-            st.success("🔢 Response numbers successfully decoded into text labels!")
-        
-        st.session_state.df = df
-        
-        with st.expander("👀 Preview Decoded Dataset"):
-            st.dataframe(df.head(10), use_container_width=True)
-            
-    except Exception as e:
-        st.error(f"Error loading files: {e}")
+    if st.button("🚀 Load & Decode Data", type="primary", use_container_width=True):
+        with st.spinner("Parsing thousands of columns... please wait a few seconds..."):
+            try:
+                # 1. Load Main Raw Dataset
+                if raw_file.name.endswith('.csv'):
+                    df = pd.read_csv(raw_file, low_memory=False)
+                else:
+                    df = pd.read_excel(raw_file)
+                    
+                # 2. Decode Categorical Numbers (Variable Values) using fast vectorized lookups
+                if values_file:
+                    if values_file.name.endswith('.csv'):
+                        df_values = pd.read_csv(values_file, header=None)
+                    else:
+                        df_values = pd.read_excel(values_file, header=None)
+                        
+                    # Find where header starts
+                    val_header_idx = 0
+                    for idx, row in df_values.iterrows():
+                        row_strs = [str(x).lower().strip() for x in row.dropna()]
+                        if 'value' in row_strs and 'label' in row_strs:
+                            val_header_idx = idx
+                            break
+                    
+                    df_values_clean = df_values.iloc[val_header_idx + 1:].copy()
+                    df_values_clean = df_values_clean.iloc[:, :3]
+                    df_values_clean.columns = ['Variable', 'Value', 'Label']
+                    df_values_clean['Variable'] = df_values_clean['Variable'].ffill()
+                    
+                    # Populate lookup dictionary
+                    mapping_dict = {}
+                    for var, group in df_values_clean.groupby('Variable'):
+                        sub_map = {}
+                        for _, row in group.iterrows():
+                            v = row['Value']
+                            l = row['Label']
+                            if pd.isna(v) or pd.isna(l): continue
+                            
+                            label_str = str(l).strip()
+                            sub_map[str(v).strip()] = label_str
+                            try:
+                                vf = float(v)
+                                sub_map[vf] = label_str
+                                if vf.is_integer():
+                                    sub_map[int(vf)] = label_str
+                            except ValueError:
+                                pass
+                        mapping_dict[str(var).strip()] = sub_map
+                        
+                    # Blazing Fast Vectorized Mapping (Only maps columns that exist)
+                    cols_to_map = set(df.columns).intersection(mapping_dict.keys())
+                    for col in cols_to_map:
+                        df[col] = df[col].map(mapping_dict[col]).fillna(df[col])
 
-# --- WORD CLOUD GENERATOR ---
+                # 3. Decode Column Headers (Variable Info)
+                if info_file:
+                    if info_file.name.endswith('.csv'):
+                        df_info = pd.read_csv(info_file, header=None)
+                    else:
+                        df_info = pd.read_excel(info_file, header=None)
+                        
+                    info_header_idx = 0
+                    for idx, row in df_info.iterrows():
+                        row_strs = [str(x).lower().strip() for x in row.dropna()]
+                        if 'variable' in row_strs and 'label' in row_strs:
+                            info_header_idx = idx
+                            break
+                            
+                    df_info_clean = df_info.iloc[info_header_idx + 1:].copy()
+                    df_info_clean.columns = df_info.iloc[info_header_idx].astype(str).str.strip()
+                    
+                    if 'Variable' in df_info_clean.columns and 'Label' in df_info_clean.columns:
+                        col_mapping = dict(zip(df_info_clean['Variable'], df_info_clean['Label']))
+                        df = rename_columns_uniquely(df, col_mapping)
+                
+                # Save the processed data to RAM so we never have to load it again!
+                st.session_state.df = df
+                st.success("✅ Data successfully loaded and cached in memory!")
+                
+            except Exception as e:
+                st.error(f"Error loading files: {e}")
+
+# --- WORD CLOUD GENERATOR (INSTANT UI) ---
 if 'df' in st.session_state:
     df = st.session_state.df
+    
+    with st.expander("👀 Preview Decoded Dataset"):
+        st.dataframe(df.head(10), use_container_width=True)
     
     st.markdown('<h3 class="step-header">Step 2: Configure and Generate Word Cloud</h3>', unsafe_allow_html=True)
     
@@ -179,9 +150,7 @@ if 'df' in st.session_state:
         # SMART HEURISTIC: Check if selected column is just checkbox data
         series_clean = df[text_col].dropna().astype(str).str.strip().str.lower()
         unique_check = series_clean.unique()
-        is_checkbox_col = False
         if len(unique_check) <= 3 and any(x in ['checked', 'unchecked', 'selected', 'not selected', 'yes', 'no'] for x in unique_check):
-            is_checkbox_col = True
             st.warning("⚠️ **Warning:** It looks like you selected a multiple-choice checkbox grid instead of a comment box! Try choosing an open-ended question (like questions starting with **Q7a**) for a better word cloud.")
         
         st.markdown("**2. Filter by Demographic / Segment (Optional)**")
@@ -214,7 +183,8 @@ if 'df' in st.session_state:
                 # Automatically add survey checkbox artifacts to stopwords
                 survey_noise = {
                     "checked", "unchecked", "selected", "not", "yes", "no", "nan", 
-                    "prefer", "english", "french", "canadian", "prefer english", "prefer french"
+                    "prefer", "english", "french", "canadian", "prefer english", "prefer french",
+                    "n", "a", "none"
                 }
                 stopwords.update(survey_noise)
                 
