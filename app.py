@@ -9,7 +9,7 @@ st.set_page_config(layout="wide", page_title="Survey Word Cloud Studio")
 
 st.markdown("""
     <style>
-        @import url('[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
         .step-header { color: #1e88e5; font-weight: 600; margin-top: 20px; border-bottom: 2px solid #f0f2f6; padding-bottom: 10px;}
     </style>
@@ -174,7 +174,7 @@ if 'df' in st.session_state:
             text_data = [t for t in text_data if len(t.strip()) > 2]
             all_text = " ".join(text_data)
             
-            if len(all_text.strip()) < 10:
+            if len(all_text.strip()) < 1:
                 st.warning("Not enough text data found in this column to generate a word cloud. Verify that you selected an open-ended comment column.")
             else:
                 # Add default and custom ignore-words
@@ -184,7 +184,7 @@ if 'df' in st.session_state:
                 survey_noise = {
                     "checked", "unchecked", "selected", "not", "yes", "no", "nan", 
                     "prefer", "english", "french", "canadian", "prefer english", "prefer french",
-                    "n", "a", "none"
+                    "n", "a", "none", "1", "0"
                 }
                 stopwords.update(survey_noise)
                 
@@ -193,26 +193,30 @@ if 'df' in st.session_state:
                     stopwords.update(custom_words)
                 
                 with st.spinner("Drawing cloud..."):
-                    wordcloud = WordCloud(
-                        width=800, 
-                        height=400, 
-                        background_color='white', 
-                        stopwords=stopwords,
-                        colormap='viridis',
-                        max_words=100
-                    ).generate(all_text)
-                    
-                    fig, ax = plt.subplots(figsize=(10, 5))
-                    ax.imshow(wordcloud, interpolation='bilinear')
-                    ax.axis('off')
-                    st.pyplot(fig)
-                    
-                    st.success(f"Word Cloud generated from {len(text_data)} matched responses!")
-                    
-                    # Provide text download
-                    st.download_button(
-                        label="📥 Download Extracted Text Block (.txt)",
-                        data=all_text,
-                        file_name="extracted_verbatims.txt",
-                        mime="text/plain"
-                    )
+                    try:
+                        wordcloud = WordCloud(
+                            width=800, 
+                            height=400, 
+                            background_color='white', 
+                            stopwords=stopwords,
+                            colormap='viridis',
+                            max_words=100
+                        ).generate(all_text)
+                        
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        ax.imshow(wordcloud, interpolation='bilinear')
+                        ax.axis('off')
+                        st.pyplot(fig)
+                        
+                        st.success(f"Word Cloud generated from {len(text_data)} matched responses!")
+                        
+                        # Provide text download
+                        st.download_button(
+                            label="📥 Download Extracted Text Block (.txt)",
+                            data=all_text,
+                            file_name="extracted_verbatims.txt",
+                            mime="text/plain"
+                        )
+                    except ValueError:
+                        # Catch the exact error the user hit!
+                        st.error("❌ **No valid words left to draw a cloud!** This happened because the column you chose only contains words that are currently in our 'Ignore List' (like 'Checked', 'Yes', 'No'). Try selecting a question that asks respondents to type out their answers (e.g. questions starting with Q7a).")
