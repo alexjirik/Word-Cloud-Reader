@@ -143,6 +143,11 @@ if 'df' in st.session_state:
     
     wc_col1, wc_col2 = st.columns([1, 2])
     
+    # We declare variables here so they can be accessed outside the columns for the data grid
+    text_data = []
+    all_text = ""
+    wordcloud_generated = False
+    
     with wc_col1:
         st.markdown("**1. Select the Open-Ended Question (Verbatims)**")
         text_col = st.selectbox("Which column contains the open-ended responses?", df.columns)
@@ -209,6 +214,7 @@ if 'df' in st.session_state:
                         st.pyplot(fig)
                         
                         st.success(f"Word Cloud generated from {len(text_data)} matched responses!")
+                        wordcloud_generated = True
                         
                         # Provide text download
                         st.download_button(
@@ -220,3 +226,16 @@ if 'df' in st.session_state:
                     except ValueError:
                         # Catch the exact error the user hit!
                         st.error("❌ **No valid words left to draw a cloud!** This happened because the column you chose only contains words that are currently in our 'Ignore List' (like 'Checked', 'Yes', 'No'). Try selecting a question that asks respondents to type out their answers (e.g. questions starting with Q7a).")
+
+    # --- FULL STATEMENTS GRID ---
+    # Display the grid of full statements directly beneath the word cloud
+    if wordcloud_generated and len(text_data) > 0:
+        st.markdown("---")
+        st.markdown('<h3 class="step-header">📝 Full Responses Grid</h3>', unsafe_allow_html=True)
+        st.markdown("Read the complete, uncut statements from your filtered respondents below:")
+        
+        # Create a clean dataframe for the grid
+        df_statements = pd.DataFrame({text_col: text_data})
+        
+        # Display the dataframe taking up the full container width
+        st.dataframe(df_statements, use_container_width=True, hide_index=True)
